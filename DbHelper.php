@@ -1,8 +1,17 @@
 <?php
-/* Shaoran DbHelper framework 3.1 */
+/* Shaoran DbHelper framework 4.0 */
+/* -- Shaoransoft Develop -- */
+
 class DbHelper {
   private static $conn;
-  private $iconv = ['Enable' => false, 'InChar' => 'UTF-8', 'OutChar' => 'UTF-8'];
+  private $dsn = null;
+  private $user = 'root';
+  private $pwd = '';
+
+  private $iconvEnable = false;
+  private $iconvInChar = 'UTF-8';
+  private $iconvOutChar = 'UTF-8';
+
   private $method = 0;
   private $entity = null;
   private $attr = null;
@@ -12,14 +21,42 @@ class DbHelper {
   private $limit = null;
   private $cmd = null;
   private $params = [];
+  private $values = [];
 
-  public function Connect($set = null) {
-    if ($set == null || !is_array($set)) {
+  public function setDsn($dsn) {
+    if (isset($dsn)) $this->dsn = $dsn;
+    return $this;
+  }
+
+  public function setUsername($user) {
+    if (isset($user)) $this->user = $user;
+    return $this;
+  }
+
+  public function setPassword($pwd) {
+    if (isset($pwd)) $this->pwd = $pwd;
+    return $this;
+  }
+
+  public function setAuth($user, $pwd) {
+    setUsername($user)->setPassword($pwd);
+    return $this;
+  }
+
+  public function setIconv($enable, $inChar, $outChar) {
+    if (isset($enable)) $this->iconvEnable = $enable;
+    if (isset($inChar)) $this->iconvInChar = $inChar;
+    if (isset($outChar)) $this->iconvOutChar = $outChar;
+    return $this;
+  }
+
+  public function connect() {
+    if (empty($this->dsn) || empty($this->user)) {
       echo 'no dsn connection';
       exit;
     }
     try {
-      self::$conn = new PDO($set['Dsn'], $set['Username'], $set['Password'], [
+      self::$conn = new PDO($this->dsn, $this->user, $this->pwd, [
         PDO::MYSQL_ATTR_INIT_COMMAND => 'SET NAMES UTF8',
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION
       ]);
@@ -30,37 +67,31 @@ class DbHelper {
     }
   }
 
-  public function GetStatus() {
+  public function isConnect() {
     return isset(self::$conn);
   }
 
-  public function SetIconv($enable = false, $inChar = null, $outChar = null) {
-    $this->iconv['Enable'] = $enable;
-    if ($inChar != null) $this->iconv['InChar'] = $inChar;
-    if ($outChar != null) $this->iconv['OutChar'] = $outChar;
-  }
-
-  public function Select($entity = null, $attr = null) {
+  public function select($entity, $attr) {
     $this->method = 0;
-    $this->Reset();
-    if ($entity != null) {
+    $this->clearAll();
+    if (!is_null($entity)) {
       $this->entity = $entity;
-      $this->attr = $attr != null ? is_array($attr) ? join(',', $attr) : $attr : '*';
+      $this->attr = is_null($attr) ? '*' : is_array($attr) ? join(',', $attr) : $attr;
     }
   }
 
-  public function Update($entity = null, $attr = null) {
+  public function update($entity, $attr) {
     $this->method = 1;
-    $this->Reset();
-    if ($entity != null) {
+    $this->clearAll();
+    if (!is_null($entity)) {
       $this->entity = $entity;
-      if ($attr != null && is_array($attr)) {
+      if (!is_null($attr) && is_array($attr)) {
         $i = 0;
         foreach ($attr as $k => $v) {
           if (isset($v)) {
             if ($i < count($attr) && $i > 0) $attrs .= ', ';
             $this->attr .= "{$k}=?";
-            $this->params[] = $v;
+            $this->values[] = $v;
             $i++;
           }
         }
@@ -68,37 +99,36 @@ class DbHelper {
     }
   }
 
-  public function Insert($entity = null, $attr = null) {
+  public function insert($entity, $attr) {
     $this->method = 2;
-    $this->Reset();
-    if ($entity != null) {
+    $this->clearAll();
+    if (!is_null($entity)) {
       $this->entity = $entity;
       $attrs = [];
-      $values = [];
-      if ($attr != null && is_array($attr)) {
+      $vals = [];
+      if (!is_null($attr) && is_array($attr)) {
         foreach ($attr as $k => $v) {
           if (isset($v)) {
             $attrs[] = $k;
-            $values[] = '?';
-            $this->params[] = $v;
+            $vals[] = '?';
+            $this->values[] = $v;
           }
         }
       }
-      $this->attr = '('.join(',', $attrs).') VALUES('.join(',', $values).')';
+      $this->attr = '('.join(',', $attrs).') VALUES('.join(',', $vals).')';
     }
   }
 
-  public function Delete($entity = null) {
+  public function delete($entity) {
     $this->method = 3;
-    $this->Reset();
-    if ($entity != null)
-      $this->entity = $entity;
+    $this->clearAll();
+    if (!is_null($entity)) $this->entity = $entity;
   }
 
-  public function Where($attr = null) {
+  public function where($attr) {
     $cmd = null;
-    $paramNotNull = $this->ParamNotNull($attr);
-    if ($attr != null && is_array($attr)) {
+    $paramCount = $this->paramCount($attr);
+    if (!is_null($attr) && is_array($attr)) {
       $i = 0;
       foreach ($attr as $k => $v) {
         if (is_array($v)) {
@@ -110,8 +140,7 @@ class DbHelper {
                     if ($i < 1) $cmd .= '(';
                     if ($i > 0) $cmd .= ' OR ';
                     $cmd .= "{$k} LIKE ?";
-                    if ($i == $paramNotNull['LIKE'] - 1)
-                      $cmd .= ')';
+                    if ($i == $paramCount['LIKE'] - 1) $cmd .= ')';
                     break;
                   case 'ISNOT':
                     if ($i > 0) $cmd .= ' AND ';
@@ -148,10 +177,10 @@ class DbHelper {
                 }
                 if (is_array($subV) && count($subV) > 0) {
                   foreach ($subV as $getSubV) {
-                    $this->params[] = $getSubV;
+                    $this->values[] = $getSubV;
                   }
                 }
-                else $this->params[] = $subV;
+                else $this->values[] = $subV;
                 $i++;
               }
             }
@@ -161,24 +190,26 @@ class DbHelper {
           if (isset($v)) {
             if ($i > 0) $cmd .= ' AND ';
             $cmd .= "{$k}=?";
-            $this->params[] = $v;
+            $this->values[] = $v;
             $i++;
           }
         }
       }
     }
-    else if ($attr != null) $cmd = $attr;
-    if ($cmd != null)
-      $this->where = $this->where != null ? " {$this->where} AND {$cmd}" : " WHERE {$cmd}";
+    else if (isset($attr)) $cmd = $attr;
+    if (!is_null($cmd))
+      $this->where = is_null($this->where) ? " WHERE {$cmd}" : " {$this->where} AND {$cmd}";
+    return $this;
   }
 
-  public function AppendWhere($sql = null) {
-    $this->where .= $this->where != null ? ' AND ' : ' WHERE ';
+  public function appendWhere($sql) {
+    $this->where .= is_null($this->where) ? ' WHERE ' : ' AND ';
     if (isset($sql)) $this->where .= $sql;
+    return $this;
   }
 
-  public function OrderBy($attr) {
-    if ($attr != null && is_array($attr)) {
+  public function orderBy($attr) {
+    if (!is_null($attr) && is_array($attr)) {
       $this->orderBy .= ' ORDER BY ';
       $i = 0;
       foreach ($attr as $k => $v) {
@@ -204,8 +235,8 @@ class DbHelper {
     }
   }
 
-  public function GroupBy($attr) {
-    if ($attr != null && is_array($attr)) {
+  public function groupBy($attr) {
+    if (!is_null($attr) && is_array($attr)) {
       $this->groupBy .= ' GROUP BY ';
       $i = 0;
       foreach ($attr as $k) {
@@ -216,32 +247,32 @@ class DbHelper {
     }
   }
 
-  public function Limit($limit, $offset = 25) {
-    if (isset($limit) && is_numeric($limit)) {
+  public function limit($limit, $offset = 25) {
+    if (!is_null($limit) && is_numeric($limit)) {
       $this->limit = " LIMIT {$limit}";
       if (isset($offset) && is_numeric($offset)) $this->limit .= ", {$offset}";
     }
   }
 
-  public function GetCommand() {
-    $this->CreateCmd();
+  public function getCommand() {
+    $this->createCmd();
     return $this->cmd;
   }
 
-  public function GetParameter() {
-    return $this->params;
+  public function getValue() {
+    return $this->values;
   }
 
-  public function Execute() {
-    $this->CreateCmd();
+  public function execute() {
+    $this->createCmd();
     switch ($this->method) {
       case 0:
         $result = [];
-        if ($this->cmd != null) {
-          $query = $this->ExecuteCmd();
+        if (!is_null($this->cmd)) {
+          $query = $this->executeCmd();
           if ($query != null && $query->rowCount() > 0) {
             while ($row = $query->fetch(PDO::FETCH_ASSOC)) {
-              $result[] = $this->CharConvert($row, true);
+              $result[] = $this->charConvert($row, true);
             }
           }
         }
@@ -250,7 +281,7 @@ class DbHelper {
       default:
         $result = false;
         if ($this->cmd != null) {
-          $query = $this->ExecuteCmd();
+          $query = $this->executeCmd();
           if ($query != null) $result = $query->rowCount() > 0;
         }
         return $result;
@@ -258,9 +289,9 @@ class DbHelper {
     }
   }
 
-  private function ParamNotNull($attr = null) {
+  private function paramCount($attr) {
     $result = ['LIKE' => 0, 'ISNOT' => 0, 'IN' => 0, 'NOTIN' => 0, 'MORE' => 0, 'LESS' => 0, 'IS' => 0];
-    if ($attr != null && is_array($attr)) {
+    if (isset($attr) && is_array($attr)) {
       foreach ($attr as $k => $v) {
         if (is_array($v)) {
           if (count($v) > 0) {
@@ -276,30 +307,30 @@ class DbHelper {
     return $result;
   }
 
-  private function CreateCmd() {
+  private function createCmd() {
     switch ($this->method) {
       case 0:
         $this->cmd = "SELECT {$this->attr} FROM {$this->entity}";
-        if ($this->where != null) $this->cmd .= $this->where;
-        if ($this->orderBy != null) $this->cmd .= $this->orderBy;
-        if ($this->groupBy != null) $this->cmd .= $this->groupBy;
-        if ($this->limit != null) $this->cmd .= $this->limit;
+        if (!is_null($this->where)) $this->cmd .= $this->where;
+        if (!is_null($this->orderBy)) $this->cmd .= $this->orderBy;
+        if (!is_null($this->groupBy)) $this->cmd .= $this->groupBy;
+        if (!is_null($this->limit)) $this->cmd .= $this->limit;
         break;
       case 1:
         $this->cmd = "UPDATE {$this->entity} SET {$this->attr}";
-        if ($this->where != null) $this->cmd .= $this->where;
+        if (!is_null($this->where)) $this->cmd .= $this->where;
         break;
       case 2:
         $this->cmd = "INSERT INTO {$this->entity} {$this->attr}";
         break;
       case 3:
         $this->cmd = "DELETE FROM {$this->entity}";
-        if ($this->where != null) $this->cmd .= $this->where;
+        if (!is_null($this->where)) $this->cmd .= $this->where;
         break;
     }
   }
 
-  private function Reset() {
+  private function clearAll() {
     $this->entity = null;
     $this->attr = null;
     $this->where = null;
@@ -310,9 +341,9 @@ class DbHelper {
     $this->params = [];
   }
 
-  private function ExecuteCmd() {
+  private function executeCmd() {
     $query = null;
-    $params = $this->method < 1 ? $this->CharConvert($this->params) : $this->params;
+    $params = $this->method < 1 ? $this->charConvert($this->values) : $this->values;
     try {
       $query = self::$conn->prepare($this->cmd);
       $query->execute($params);
@@ -324,15 +355,16 @@ class DbHelper {
     return $query;
   }
 
-  private function CharConvert($data = [], $revert = false) {
-    if ($data != null && is_array($data)) {
-      if (!$this->iconv['Enable']) {
-        $inChar = $revert ? $this->iconv['OutChar'] : $this->iconv['InChar'];
-        $outChar = $revert ? $this->iconv['InChar'] : $this->iconv['OutChar'];
+  private function charConvert($data = [], $revert = false) {
+    if (!is_null($data) && is_array($data)) {
+      if (!$this->iconvEnable) {
+        $inChar = $revert ? $this->iconvOutChar : $this->iconvInChar;
+        $outChar = $revert ? $this->iconvInChar : $this->iconvOutChar;
         return array_combine(array_keys($data), array_map(function ($v) use ($inChar, $outChar) {
           return iconv($inChar, $outChar, $v);
         }, $data));
       }
+      else return $data;
     }
     return $data;
   }
